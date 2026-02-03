@@ -17,7 +17,7 @@ The bot runs via the "Telegram Bot" workflow using `python bot.py`
 
 ## Game Themes
 1. **Өзімізғо** - Custom text-only cards
-2. **JJS** - Jujutsu Kaisen themed cards with images
+2. **JJS** - Jujutsu Shenanigans themed cards with images
 3. **Clash Royale** - Clash Royale cards with images
 
 ## Scenarios
