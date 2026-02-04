@@ -1,4 +1,4 @@
-﻿import os
+import os
 import random
 import telebot
 from telebot import types
@@ -7,6 +7,7 @@ from telebot import types
 BOT_TOKEN = os.getenv("BOT_TOKEN") or "8382682504:AAErIB11GWaGJDfn4YRlu6hpQC1dAVsDRng"
 
 bot = telebot.TeleBot(BOT_TOKEN)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # Темы (можно ещё добавлять карты отсюда)
 THEMES = {
@@ -360,7 +361,7 @@ def send_role(chat_id):
     if assignment["role"] == "spy":
         kb = types.InlineKeyboardMarkup()
         kb.add(types.InlineKeyboardButton("Скрыть", callback_data="hide_role"))
-        spy_path = os.path.join("spygame", "spy", "spy.jpg")
+        spy_path = os.path.join(BASE_DIR, "spy", "spy.jpg")
         try:
             with open(spy_path, "rb") as img:
                 bot.send_photo(chat_id, img, caption="🔎 <b>Вы шпион</b>", reply_markup=kb, parse_mode="HTML")
@@ -374,7 +375,7 @@ def send_role(chat_id):
 
     caption = f"🗣️ <b>Вы мирный житель</b>\n\n🃏Карта игры: <b>{card_name}</b>"
     if card_path:
-        with open(os.path.join("spygame", card_path), "rb") as img:
+        with open(os.path.join(BASE_DIR, card_path), "rb") as img:
             bot.send_photo(chat_id, img, caption=caption, reply_markup=kb, parse_mode="HTML")
     else:
         bot.send_message(chat_id, caption, reply_markup=kb, parse_mode="HTML")
