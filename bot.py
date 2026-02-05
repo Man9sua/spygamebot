@@ -938,7 +938,7 @@ def start_elimination_discuss(group_id):
     text = "🗣️ <b>Выбывание</b>\n\nОбсудите, кого линчевать в этом кругу"
     bot.send_message(group_id, text, parse_mode="HTML")
     state["elimination"] = {"votes": {}, "timer": None, "confirm_votes": {}, "candidate": None, "confirm_timer": None}
-    state["elimination"]["timer"] = threading.Timer(30, start_elimination_vote, args=(group_id,))
+    state["elimination"]["timer"] = threading.Timer(60, start_elimination_vote, args=(group_id,))
     state["elimination"]["timer"].start()
 
 
