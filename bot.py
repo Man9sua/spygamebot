@@ -23,6 +23,7 @@ if BOT_USERNAME:
 
 GROUP_GAMES = {}
 USER_TO_GROUP = {}
+GROUP_LAST_CARD = {}
 
 GROUP_RANDOM_SCENARIO_WEIGHTS = [
     ("classic", 90),
@@ -290,10 +291,12 @@ def get_state(chat_id):
         "index": 0,
         "prompt_message_id": None,
         "phase": "idle",
+        "last_card": None,
     })
 
 
 def reset_state(chat_id):
+    prev_last_card = STATE.get(chat_id, {}).get("last_card")
     STATE[chat_id] = {
         "theme": None,
         "players": None,
@@ -304,6 +307,7 @@ def reset_state(chat_id):
         "index": 0,
         "prompt_message_id": None,
         "phase": "idle",
+        "last_card": prev_last_card,
     }
 
 
@@ -409,7 +413,25 @@ def get_theme_cards(theme_key):
     return theme["cards"]
 
 
-def build_assignments(theme_key, players, scenario_final, spies_count):
+def pick_card_without_repeat(cards, last_card=None):
+    if not cards:
+        return None
+    if last_card is None or len(cards) == 1:
+        return random.choice(cards)
+    pool = [card for card in cards if card != last_card]
+    if not pool:
+        pool = cards
+    return random.choice(pool)
+
+
+def first_civilian_card(assignments):
+    for assignment in assignments:
+        if assignment.get("role") == "civilian":
+            return assignment.get("card")
+    return None
+
+
+def build_assignments(theme_key, players, scenario_final, spies_count, last_card=None):
     cards = get_theme_cards(theme_key)
     assignments = []
 
@@ -419,7 +441,7 @@ def build_assignments(theme_key, players, scenario_final, spies_count):
         return assignments
 
     if scenario_final == "all_civilians":
-        card = random.choice(cards)
+        card = pick_card_without_repeat(cards, last_card=last_card)
         for _ in range(players):
             assignments.append({"role": "civilian", "card": card})
         return assignments
@@ -434,7 +456,7 @@ def build_assignments(theme_key, players, scenario_final, spies_count):
         return assignments
 
     if scenario_final == "opposite":
-        card = random.choice(cards)
+        card = pick_card_without_repeat(cards, last_card=last_card)
         peaceful_index = random.randrange(players)
         for i in range(players):
             if i == peaceful_index:
@@ -444,7 +466,7 @@ def build_assignments(theme_key, players, scenario_final, spies_count):
         return assignments
 
     # классический сценарий
-    card = random.choice(cards)
+    card = pick_card_without_repeat(cards, last_card=last_card)
     indices = list(range(players))
     random.shuffle(indices)
     spy_indices = set(indices[:spies_count])
@@ -627,6 +649,7 @@ def create_group_state(group_id, creator):
         "assignments": {},
         "alive": set(),
         "card": None,
+        "last_card": GROUP_LAST_CARD.get(group_id),
         "round": 0,
         "turn_order": [],
         "turn_index": 0,
@@ -831,6 +854,7 @@ def start_group_game(group_id):
         players,
         state["scenario_final"],
         state["spies_count"],
+        state.get("last_card"),
     )
     shuffled = list(state["participants"])
     random.shuffle(shuffled)
@@ -841,6 +865,9 @@ def start_group_game(group_id):
         if assignment["role"] == "civilian":
             state["card"] = assignment["card"]
             break
+    if state["card"] is not None:
+        state["last_card"] = state["card"]
+        GROUP_LAST_CARD[group_id] = state["card"]
     state["alive"] = set(state["participants"])
 
     unreachable = []
@@ -1760,7 +1787,11 @@ def handle_callback(call):
             state["players"],
             scenario_final,
             state["spies"],
+            state.get("last_card"),
         )
+        civilian_card = first_civilian_card(state["assignments"])
+        if civilian_card is not None:
+            state["last_card"] = civilian_card
         bot.edit_message_text(
             "<b>Раздача ролей начинается...</b>",
             chat_id,
@@ -1779,7 +1810,11 @@ def handle_callback(call):
             state["players"],
             "classic",
             spies,
+            state.get("last_card"),
         )
+        civilian_card = first_civilian_card(state["assignments"])
+        if civilian_card is not None:
+            state["last_card"] = civilian_card
         bot.edit_message_text(
             f"🔎 <b>Шпионов:</b> {spies}.\n<i>Раздача ролей начинается...</i>",
             chat_id,
