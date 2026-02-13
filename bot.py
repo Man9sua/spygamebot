@@ -4,6 +4,7 @@ import random
 import threading
 import telebot
 from telebot import types
+from fuzzywuzzy import fuzz
 
 
 BOT_TOKEN = os.getenv("BOT_TOKEN") or "8382682504:AAErIB11GWaGJDfn4YRlu6hpQC1dAVsDRng"
@@ -63,7 +64,7 @@ HELP_PAGES = [
         "<code>/s</code> — начать подбор участников\n"
         "<code>/stop</code> — остановить подбор/игру (только создатель)\n"
         "<code>/game</code> — досрочно запустить игру (если ≥ 3 игроков)\n"
-        "<code>/answer &lt;название карты&gt;</code> — попытка шпиона угадать карту\n!Шпион должен написать полное название карты!\n\n"
+        "<code>/answer &lt;название карты&gt;</code> — попытка шпиона угадать карту\n\n"
         "⚠️ <i>Важно: для группового режима бот должен быть администратором.</i>"
     ),
     (
@@ -90,9 +91,9 @@ HELP_PAGES = [
         "<b>Классический</b> — мирные + шпионы.\n"
         "Количество шпионов выбирается вручную.\n\n"
         "<b>Рандомный</b> — бот сам выбирает сценарий:\n"
-        "• Классический — 70%\n"
-        "• Все шпионы — 5%\n"
-        "• Все мирные — 5%\n"
+        "• Классический — 60%\n"
+        "• Все шпионы — 10%\n"
+        "• Все мирные — 10%\n"
         "• Хаос — 10%\n"
         "• Наоборот — 10%\n\n"
         "<b>Хаос</b> — у каждого своя карта в одной теме.\n"
@@ -252,9 +253,9 @@ SCENARIOS = {
 }
 
 RANDOM_SCENARIO_WEIGHTS = [
-    ("classic", 70),
-    ("all_spies", 5),
-    ("all_civilians", 5),
+    ("classic", 60),
+    ("all_spies", 10),
+    ("all_civilians", 10),
     ("chaos", 10),
     ("opposite", 10),
 ]
@@ -527,6 +528,37 @@ def numbered_user_list(user_ids, users_map):
         name = users_map.get(uid, {}).get("name") or str(uid)
         lines.append(f"{idx}. {mention_user(uid, name)}")
     return "\n".join(lines) if lines else "—"
+
+
+def normalize_match_text(value):
+    # Keep letters/digits from any alphabet, normalize spaces, lowercase.
+    normalized = "".join(ch.lower() if ch.isalnum() else " " for ch in value)
+    return " ".join(normalized.split())
+
+
+def is_fuzzy_card_match(guess_text, card_name):
+    guess_norm = normalize_match_text(guess_text)
+    card_norm = normalize_match_text(card_name)
+    if not guess_norm or not card_norm:
+        return False, 0
+
+    if guess_norm == card_norm:
+        return True, 100
+
+    guess_sorted = " ".join(sorted(guess_norm.split()))
+    card_sorted = " ".join(sorted(card_norm.split()))
+
+    scores = [
+        fuzz.ratio(guess_norm, card_norm),
+        fuzz.partial_ratio(guess_norm, card_norm),
+        fuzz.token_sort_ratio(guess_norm, card_norm),
+        fuzz.token_set_ratio(guess_norm, card_norm),
+        fuzz.ratio(guess_sorted, card_sorted),
+    ]
+    best_score = max(scores)
+
+    # 87 keeps swapped words/typos, but avoids loose false positives.
+    return best_score >= 87, best_score
 
 
 def get_group_state(group_id):
@@ -938,7 +970,7 @@ def start_elimination_discuss(group_id):
     text = "🗣️ <b>Выбывание</b>\n\nОбсудите, кого линчевать в этом кругу"
     bot.send_message(group_id, text, parse_mode="HTML")
     state["elimination"] = {"votes": {}, "timer": None, "confirm_votes": {}, "candidate": None, "confirm_timer": None}
-    state["elimination"]["timer"] = threading.Timer(60, start_elimination_vote, args=(group_id,))
+    state["elimination"]["timer"] = threading.Timer(30, start_elimination_vote, args=(group_id,))
     state["elimination"]["timer"].start()
 
 
@@ -1294,9 +1326,8 @@ def cmd_group_answer(message):
         return
 
     card_name = state.get("card")[0] if state.get("card") else ""
-    norm_guess = " ".join(guess_text.lower().split())
-    norm_card = " ".join(card_name.lower().split())
-    if norm_guess == norm_card:
+    matched, _score = is_fuzzy_card_match(guess_text, card_name)
+    if matched:
         winner = state["users"][message.from_user.id]["name"]
         end_group_game(group_id, f"🎉 Победа Шпиона {winner}!")
         return
@@ -1808,7 +1839,25 @@ def handle_group_messages(message):
     if message.text and message.text.startswith("/"):
         return
 
-    if state.get("status") == "round_speaking":
+    status = state.get("status")
+    active_statuses = {
+        "roles",
+        "round_speaking",
+        "action_vote",
+        "elimination_discuss",
+        "elimination_vote",
+        "elimination_confirm",
+    }
+
+    # During active game phases, non-participants cannot write in group chat.
+    if status in active_statuses and message.from_user.id not in state.get("participants", []):
+        try:
+            bot.delete_message(message.chat.id, message.message_id)
+        except Exception:
+            pass
+        return
+
+    if status == "round_speaking":
         speaker_id = state.get("current_speaker_id")
         if message.from_user.id != speaker_id:
             try:
@@ -1826,7 +1875,16 @@ def handle_group_messages(message):
         advance_turn(message.chat.id)
         return
 
-    if state.get("status") in ("action_vote", "elimination_vote", "elimination_confirm", "roles"):
+    # During votes/confirm/discuss alive players can talk, others are muted.
+    if status in ("action_vote", "elimination_discuss", "elimination_vote", "elimination_confirm"):
+        if message.from_user.id not in state.get("alive", set()):
+            try:
+                bot.delete_message(message.chat.id, message.message_id)
+            except Exception:
+                pass
+        return
+
+    if status == "roles":
         try:
             bot.delete_message(message.chat.id, message.message_id)
         except Exception:
@@ -1835,7 +1893,3 @@ def handle_group_messages(message):
 bot.polling(none_stop=True)
 
 # Janasyl syebalsya otsuda
-
-
-
-
