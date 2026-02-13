@@ -31,6 +31,19 @@ GROUP_RANDOM_SCENARIO_WEIGHTS = [
 
 CHANGELOG = [
     {
+        "version": "1.2.0",
+        "added": [
+            "Команда /a как короткий вариант /answer",
+            "Единый формат упоминаний игроков: имя со ссылкой на профиль",
+            "Сохранение метки «Рандомный» в группе при показе сценария",
+            "Стилизованный блок завершения игры",
+        ],
+        "fixed": [
+            "Fuzzy-проверка ответа шпиона для перестановки слов и опечаток",
+            "Правила чата: живые могут писать в голосовании/подтверждении, неучастники ограничены",
+        ],
+    },
+    {
         "version": "1.1.0",
         "added": [
             "Групповой режим с подбором, настройкой и голосованиями",
@@ -64,7 +77,8 @@ HELP_PAGES = [
         "<code>/s</code> — начать подбор участников\n"
         "<code>/stop</code> — остановить подбор/игру (только создатель)\n"
         "<code>/game</code> — досрочно запустить игру (если ≥ 3 игроков)\n"
-        "<code>/answer &lt;название карты&gt;</code> — попытка шпиона угадать карту\n\n"
+        "<code>/a &lt;название карты&gt;</code> — попытка шпиона угадать карту\n"
+        "<code>/answer &lt;название карты&gt;</code> — полный синоним команды /a\n\n"
         "⚠️ <i>Важно: для группового режима бот должен быть администратором.</i>"
     ),
     (
@@ -561,6 +575,12 @@ def is_fuzzy_card_match(guess_text, card_name):
     return best_score >= 87, best_score
 
 
+def group_scenario_label(state):
+    if state.get("scenario_choice") == "random":
+        return "Рандомный"
+    return SCENARIOS.get(state.get("scenario_final"), state.get("scenario_final"))
+
+
 def get_group_state(group_id):
     return GROUP_GAMES.get(group_id)
 
@@ -836,7 +856,9 @@ def start_group_game(group_id):
         state["assignments"].pop(uid, None)
         state["users"].pop(uid, None)
         try:
-            bot.send_message(group_id, f"Игрок {uid} не открыл бота и был удален из игры.")
+            user_name = state["users"].get(uid, {}).get("name", str(uid))
+            user_link = mention_user(uid, user_name)
+            bot.send_message(group_id, f"⚠️ {user_link} не открыл бота и был удален из игры.", parse_mode="HTML")
         except Exception:
             pass
 
@@ -862,7 +884,7 @@ def start_round(group_id):
     state["turn_spoken"] = False
 
     names_text = numbered_user_list(alive, state["users"])
-    scenario_label = SCENARIOS.get(state["scenario_final"], state["scenario_final"])
+    scenario_label = group_scenario_label(state)
     text = (
         f"🔔 <b>Круг {state['round']}</b>\n"
         f"👥 Игроков: <b>{len(alive)}</b>\n"
@@ -886,8 +908,9 @@ def start_turn(group_id):
     state["current_speaker_id"] = speaker_id
     state["turn_spoken"] = False
     name = state["users"][speaker_id]["name"]
+    name_link = mention_user(speaker_id, name)
     text = (
-        f"🎙️ <b>Ход игрока:</b> {name}\n\n"
+        f"🎙️ <b>Ход игрока:</b> {name_link}\n\n"
         "Опишите карту игры, не называя ее конкретно.\n"
         "⏱️ У вас есть 30 секунд на сообщение."
     )
@@ -1058,11 +1081,13 @@ def start_confirmation_vote(group_id, candidate_id):
     state["elimination"]["confirm_votes"] = {"yes": set(), "no": set()}
 
     name = state["users"][candidate_id]["name"]
+    name_link = mention_user(candidate_id, name)
     kb = confirm_keyboard(state)
     msg = bot.send_message(
         group_id,
-        f"❓ Вы действительно хотите линчевать {name}?",
+        f"❓ Вы действительно хотите линчевать {name_link}?",
         reply_markup=kb,
+        parse_mode="HTML",
     )
     state["elimination"]["confirm_message_id"] = msg.message_id
     state["elimination"]["confirm_timer"] = threading.Timer(20, finalize_confirmation_vote, args=(group_id,))
@@ -1104,12 +1129,13 @@ def eliminate_player(group_id, player_id):
     if not state:
         return
     name = state["users"][player_id]["name"]
+    name_link = mention_user(player_id, name)
     role = state["assignments"][player_id]["role"]
     role_label = "Шпион" if role == "spy" else "Мирный житель"
     if player_id in state["alive"]:
         state["alive"].remove(player_id)
-    bot.send_message(group_id, f"❌ {name} выбывает из игры")
-    bot.send_message(group_id, f"🪪 {name} — {role_label}")
+    bot.send_message(group_id, f"❌ {name_link} выбывает из игры", parse_mode="HTML")
+    bot.send_message(group_id, f"🪪 {name_link} — <b>{role_label}</b>", parse_mode="HTML")
 
     if check_group_end(group_id):
         return
@@ -1137,10 +1163,14 @@ def end_group_game(group_id, result_text):
     if not state:
         return
     state["status"] = "ended"
-    bot.send_message(group_id, result_text)
+    bot.send_message(
+        group_id,
+        f"🏁 <b>Игра завершена</b>\n\n<i>{result_text}</i>",
+        parse_mode="HTML",
+    )
 
     card_name, card_path = state.get("card") or (None, None)
-    scenario_label = SCENARIOS.get(state["scenario_final"], state["scenario_final"])
+    scenario_label = group_scenario_label(state)
 
     players_lines = []
     for idx, uid in enumerate(state["participants"], start=1):
@@ -1152,11 +1182,11 @@ def end_group_game(group_id, result_text):
         players_lines.append(f"{idx}. {name_link} — {role_label}")
 
     summary = (
-        "🏁 Итоги игры\n"
-        f"🗺️ Карта: {card_name}\n"
-        f"🎭 Тема: {THEMES[state['theme']]['label']}\n"
-        f"📋 Сценарий: {scenario_label}\n\n"
-        "👥 Игроки:\n"
+        "<b>Итоги партии</b>\n"
+        f"🗺️ <b>Карта:</b> {card_name}\n"
+        f"🎭 <b>Тема:</b> {THEMES[state['theme']]['label']}\n"
+        f"📋 <b>Сценарий:</b> {scenario_label}\n\n"
+        "<b>Игроки:</b>\n"
         + "\n".join(players_lines)
     )
 
@@ -1242,9 +1272,11 @@ def cmd_group_start(message):
     group_id = message.chat.id
     state = GROUP_GAMES.get(group_id)
     if state and state.get("status") != "ended":
+        creator_link = mention_user(state["creator_id"], state["creator_name"])
         bot.send_message(
             group_id,
-            f"⛔ Невозможно начать подбор игроков. Подбор уже начат игроком {state['creator_name']}",
+            f"⛔ Невозможно начать подбор игроков. Подбор уже начат игроком {creator_link}",
+            parse_mode="HTML",
         )
         return
     state = create_group_state(group_id, message.from_user)
@@ -1296,15 +1328,15 @@ def cmd_group_game(message):
     start_group_config(group_id)
 
 
-@bot.message_handler(commands=["answer"])
+@bot.message_handler(commands=["a", "answer"])
 def cmd_group_answer(message):
     guess = message.text.split(maxsplit=1)
     if len(guess) < 2:
-        bot.send_message(message.chat.id, "ℹ️ Используйте: /answer Название карты")
+        bot.send_message(message.chat.id, "ℹ️ Используйте: /a Название карты")
         return
     guess_text = " ".join(guess[1:]).strip()
     if not guess_text:
-        bot.send_message(message.chat.id, "ℹ️ Используйте: /answer Название карты")
+        bot.send_message(message.chat.id, "ℹ️ Используйте: /a Название карты")
         return
 
     if is_group_chat(message.chat):
@@ -1329,11 +1361,17 @@ def cmd_group_answer(message):
     matched, _score = is_fuzzy_card_match(guess_text, card_name)
     if matched:
         winner = state["users"][message.from_user.id]["name"]
-        end_group_game(group_id, f"🎉 Победа Шпиона {winner}!")
+        winner_link = mention_user(message.from_user.id, winner)
+        end_group_game(group_id, f"🎉 Победа Шпиона {winner_link}!")
         return
 
     name = state["users"][message.from_user.id]["name"]
-    bot.send_message(group_id, f"💥 Шпион {name} был выбит из игры за неправильный ответ: {guess_text}")
+    name_link = mention_user(message.from_user.id, name)
+    bot.send_message(
+        group_id,
+        f"💥 Шпион {name_link} был выбит из игры за неправильный ответ: <code>{html.escape(guess_text)}</code>",
+        parse_mode="HTML",
+    )
     if message.from_user.id in state["alive"]:
         state["alive"].remove(message.from_user.id)
     check_group_end(group_id)
@@ -1538,11 +1576,13 @@ def handle_group_callback(call):
         state["elimination"]["votes"][call.from_user.id] = target_id
         voter_name = state["users"][call.from_user.id]["name"]
         target_name = state["users"][target_id]["name"]
+        voter_link = mention_user(call.from_user.id, voter_name)
+        target_link = mention_user(target_id, target_name)
         try:
-            bot.send_message(call.from_user.id, f"✅ Вы успешно отдали свой голос за {target_name}")
+            bot.send_message(call.from_user.id, f"✅ Вы успешно отдали свой голос за {target_link}", parse_mode="HTML")
         except Exception:
             pass
-        bot.send_message(group_id, f"🗳️ {voter_name} проголосовал за {target_name}")
+        bot.send_message(group_id, f"🗳️ {voter_link} проголосовал за {target_link}", parse_mode="HTML")
         if len(state["elimination"]["votes"]) >= len(state["alive"]):
             cancel_timer(state["elimination"].get("timer"))
             finalize_elimination_vote(group_id)
